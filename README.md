@@ -150,7 +150,7 @@ This project is licensed under the **MIT License**.
 
 ## 👨‍💻 Author
 
-**Your Name**
+**Mohan Sai Kumar**
 
 GitHub: https://github.com/your-username
 
