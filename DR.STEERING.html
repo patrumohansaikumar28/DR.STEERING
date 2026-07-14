@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title> Gesture Steering Pro</title>
+    
+    <!-- Load MediaPipe dependencies via CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            margin: 0;
+            background-color: #1a1a1a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            overflow: hidden;
+        }
+        #container {
+            position: relative;
+            display: flex;
+            gap: 20px;
+        }
+        canvas {
+            background-color: #2b2b2b;
+            box-shadow: 0px 10px 30px rgba(0, 0, 0, 0.7);
+            border-left: 6px dashed #ffcc00;
+            border-right: 6px dashed #ffcc00;
+            border-radius: 4px;
+        }
+        video {
+            display: none;
+        }
+        #webcam-preview {
+            width: 200px;
+            height: 150px;
+            background: #000;
+            border: 3px solid #fff;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+            position: absolute;
+            top: 10px;
+            right: -235px;
+            transform: scaleX(-1);
+            border-radius: 4px;
+        }
+        /* Menu Overlay Layer */
+        #menu-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 600px;
+            height: 800px;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+            border-radius: 4px;
+        }
+        .menu-title {
+            color: #db0606;
+            font-size: 42px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            text-shadow: 0px 4px 12px rgba(231, 3, 22, 0.4);
+            letter-spacing: 2px;
+        }
+        .menu-subtitle {
+            color: #bbb;
+            font-size: 18px;
+            margin-bottom: 40px;
+        }
+        .start-btn {
+            background: linear-gradient(135deg, #ffcc00, #ff6600);
+            color: white;
+            border: none;
+            padding: 15px 40px;
+            font-size: 22px;
+            font-weight: bold;
+            border-radius: 30px;
+            cursor: pointer;
+            box-shadow: 0 5px 15px rgba(255, 102, 0, 0.4);
+            transition: all 0.2s;
+        }
+        .start-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(255, 102, 0, 0.6);
+        }
+        #status {
+            position: absolute;
+            top: 50px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(5, 211, 166, 0.95);
+            color: black;
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-weight: bold;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+            z-index: 5;
+            display: block;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="container">
+        <canvas id="gameCanvas" width="600" height="800"></canvas>
+        <canvas id="webcam-preview"></canvas>
+        
+        <!-- Start Game Control Screen Panel Overlay -->
+        <div id="menu-overlay">
+            <div class="menu-title">DR. STEERING AI</div>
+            <div class="menu-subtitle">Gesture Finger-Tracking Sandbox</div>
+            <button class="start-btn" id="startBtn">START ENGINE</button>
+        </div>
+
+        <div id="status">🎥 Initializing Driver Webcam Module...</div>
+    </div>
+    
+    <video id="inputVideo"></video>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        const videoElement = document.getElementById("inputVideo");
+        const previewCanvas = document.getElementById("webcam-preview");
+        const previewCtx = previewCanvas.getContext("2d");
+        const statusDiv = document.getElementById("status");
+        const menuOverlay = document.getElementById("menu-overlay");
+        const startBtn = document.getElementById("startBtn");
+
+        // Game state parameters
+        let gameStarted = false;
+        let score = 0;
+        let highScore = localStorage.getItem("carHighScore") ? parseInt(localStorage.getItem("carHighScore")) : 0;
+        let gameOver = false;
+
+        // Player configuration
+        const player = {
+            x: canvas.width / 2 - 25,
+            y: canvas.height - 140,
+            width: 52,
+            height: 95
+        };
+
+        // Road track elements tracking setup
+        let roadLines = [];
+        const lineWidth = 12, lineHeight = 80;
+        let roadSpeed = 5;
+        for (let i = 0; i < 5; i++) {
+            roadLines.push({ x: canvas.width / 2 - lineWidth / 2, y: i * 200 });
+        }
+
+        // Hazards logic metrics
+        let enemies = [];
+        const enemyWidth = 52, enemyHeight = 95;
+        let enemySpeed = 5;
+        let spawnTimer = 0;
+
+        // --- DR. DRIVING LOUNGE-JAZZ AUDIO SYNTH ENGINE ---
+        let audioCtx = null;
+        let bassGain = null;
+        let leadGain = null;
+        let musicInterval = null;
+        let currentStep = 0;
+
+        // Classic Dr. Driving walking lounge bassline (frequencies)
+        const drDrivingBass = [
+            110.00, 138.59, 164.81, 138.59, // A Major walk
+            146.83, 185.00, 220.00, 185.00, // D Major walk
+            164.81, 207.65, 246.94, 220.00, // E Major walk
+            110.00, 164.81, 220.00, 110.00  // Turnaround
+        ];
+
+        // Light, bouncy companion chord triggers for the lead melody feel
+        const drDrivingLead = [
+            440.00, 554.37, 659.25, 0,
+            587.33, 739.99, 880.00, 0,
+            659.25, 830.61, 987.77, 0,
+            440.00, 659.25, 880.00, 0
+        ];
+
+        function initDrDrivingMusic() {
+            if (audioCtx) return; 
+
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            
+            // Set up level controls
+            bassGain = audioCtx.createGain();
+            bassGain.gain.setValueAtTime(0.25, audioCtx.currentTime);
+            bassGain.connect(audioCtx.destination);
+
+            leadGain = audioCtx.createGain();
+            leadGain.gain.setValueAtTime(0.08, audioCtx.currentTime); // Subtle lead tracking
+            leadGain.connect(audioCtx.destination);
+
+            startMusicSequencer();
+        }
+
+        function startMusicSequencer() {
+            if (musicInterval) clearInterval(musicInterval);
+
+            // Bouncy speed: tempos ramp up slightly as you accelerate forward
+            let baseTempo = Math.max(130, 220 - (roadSpeed * 6)); 
+
+            musicInterval = setInterval(() => {
+                if (gameOver || !audioCtx) return;
+
+                let now = audioCtx.currentTime;
+
+                // 1. Synthesize the Walking Bassline Instrument
+                let bOsc = audioCtx.createOscillator();
+                let bNode = audioCtx.createGain();
+                bOsc.type = 'triangle'; // Round, retro bass tone
+                bOsc.frequency.setValueAtTime(drDrivingBass[currentStep], now);
+                
+                bNode.gain.setValueAtTime(0.25, now);
+                bNode.gain.exponentialRampToValueAtTime(0.01, now + 0.22);
+                
+                bOsc.connect(bNode);
+                bNode.connect(audioCtx.destination);
+                bOsc.start(now);
+                bOsc.stop(now + 0.25);
+
+                // 2. Synthesize the Whimsical Lead Melody Instrument (Every other beat)
+                if (drDrivingLead[currentStep] > 0 && currentStep % 2 === 0) {
+                    let lOsc = audioCtx.createOscillator();
+                    let lNode = audioCtx.createGain();
+                    lOsc.type = 'square'; // Classic retro chiptune beep sound
+                    lOsc.frequency.setValueAtTime(drDrivingLead[currentStep], now);
+                    
+                    lNode.gain.setValueAtTime(0.06, now);
+                    lNode.gain.exponentialRampToValueAtTime(0.005, now + 0.15);
+                    
+                    lOsc.connect(lNode);
+                    lNode.connect(audioCtx.destination);
+                    lOsc.start(now);
+                    lOsc.stop(now + 0.18);
+                }
+
+                // 3. Simple Hi-Hat Accent for the driving percussion track
+                if (currentStep % 4 === 2) {
+                    let snareNoise = audioCtx.createBufferSource();
+                    let noiseBuffer = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.05, audioCtx.sampleRate);
+                    let output = noiseBuffer.getChannelData(0);
+                    for (let i = 0; i < noiseBuffer.length; i++) {
+                        output[i] = Math.random() * 2 - 1;
+                    }
+                    snareNoise.buffer = noiseBuffer;
+                    
+                    let sGain = audioCtx.createGain();
+                    sGain.gain.setValueAtTime(0.03, now);
+                    sGain.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
+                    
+                    snareNoise.connect(sGain);
+                    sGain.connect(audioCtx.destination);
+                    snareNoise.start(now);
+                }
+
+                currentStep = (currentStep + 1) % drDrivingBass.length;
+
+            }, baseTempo);
+        }
+
+        function stopMusic() {
+            if (musicInterval) clearInterval(musicInterval);
+        }
+
+        // Start button triggering
+        startBtn.addEventListener("click", () => {
+            menuOverlay.style.display = "none";
+            gameStarted = true;
+            initDrDrivingMusic();
+            resetGame();
+        });
+
+        window.addEventListener("keydown", (e) => {
+            if (gameOver && e.key.toLowerCase() === "r") {
+                if (audioCtx && audioCtx.state === 'suspended') {
+                    audioCtx.resume();
+                }
+                initDrDrivingMusic();
+                resetGame();
+            }
+        });
+
+        function resetGame() {
+            enemies = [];
+            score = 0;
+            enemySpeed = 5;
+            roadSpeed = 5;
+            spawnTimer = 0;
+            currentStep = 0;
+            gameOver = false;
+            startMusicSequencer();
+            gameLoop();
+        }
+
+        function checkCollision(rect1, rect2) {
+            return rect1.x < rect2.x + rect2.width &&
+                   rect1.x + rect1.width > rect2.x &&
+                   rect1.y < rect2.y + rect2.height &&
+                   rect1.y + rect1.height > rect2.y;
+        }
+
+        // --- ARTISTIC GRAPHICS RENDERING FUNCTIONS ---
+        function drawPlayerCar(x, y) {
+            ctx.save();
+            ctx.translate(x, y);
+
+            // Wheels
+            ctx.fillStyle = "#111";
+            ctx.fillRect(-4, 10, 8, 18);  
+            ctx.fillRect(48, 10, 8, 18);  
+            ctx.fillRect(-4, 65, 8, 18);  
+            ctx.fillRect(48, 65, 8, 18);  
+
+            // Main Aerodynamic Chassis (Yellow Dr. Driving Style Hatchback)
+            ctx.fillStyle = "#ffcc00";
+            ctx.beginPath();
+            ctx.roundRect(0, 0, 52, 95, [10, 10, 4, 4]);
+            ctx.fill();
+
+            // Racing center windshield glass frames
+            ctx.fillStyle = "#333333";
+            ctx.fillRect(6, 20, 40, 45);
+            ctx.fillStyle = "#a8d8ea";
+            ctx.fillRect(9, 23, 34, 18); // Front window windshield panel
+
+            // Headlights glowing accents
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(4, 2, 8, 6);
+            ctx.fillRect(40, 2, 8, 6);
+
+            ctx.restore();
+        }
+
+        function drawEnemyCar(x, y) {
+            ctx.save();
+            ctx.translate(x, y);
+
+            // Wheels
+            ctx.fillStyle = "#111";
+            ctx.fillRect(-4, 12, 7, 18);
+            ctx.fillRect(49, 12, 7, 18);
+            ctx.fillRect(-4, 65, 7, 18);
+            ctx.fillRect(49, 65, 7, 18);
+
+            // Frame Chassis (Classic Highway Traffic Green Sedan Layout)
+            ctx.fillStyle = "#2ecc71";
+            ctx.beginPath();
+            ctx.roundRect(0, 0, 52, 95, [8, 8, 8, 8]);
+            ctx.fill();
+
+            // Roof panel accentuation
+            ctx.fillStyle = "#27ae60";
+            ctx.fillRect(8, 30, 36, 40);
+
+            // Front/Rear Glass segments
+            ctx.fillStyle = "#1a252f";
+            ctx.fillRect(10, 20, 32, 8);  
+            ctx.fillRect(10, 72, 32, 6);  
+
+            // Headlights glowing accents
+            ctx.fillStyle = "#ffdf00";
+            ctx.fillRect(6, 2, 8, 5);
+            ctx.fillRect(38, 2, 8, 5);
+
+            ctx.restore();
+        }
+
+        // --- MEDIAPIPE FRAME COMPUTATION AND RENDERING ---
+        function onResults(results) {
+            previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+            previewCtx.drawImage(results.image, 0, 0, previewCanvas.width, previewCanvas.height);
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                const indexTip = landmarks[8];
+                const indexKnuckle = landmarks[6];
+
+                if (indexTip.y < indexKnuckle.y) {
+                    statusDiv.style.display = "none";
+
+                    if (gameStarted && !gameOver) {
+                        let targetX = (1 - indexTip.x) * canvas.width;
+                        player.x = targetX - player.width / 2;
+
+                        if (player.x < 0) player.x = 0;
+                        if (player.x > canvas.width - player.width) player.x = canvas.width - player.width;
+                    }
+
+                    previewCtx.save();
+                    let pX = indexTip.x * previewCanvas.width;
+                    let pY = indexTip.y * previewCanvas.height;
+                    previewCtx.font = "24px Arial";
+                    previewCtx.textAlign = "center";
+                    previewCtx.textBaseline = "middle";
+                    previewCtx.fillText("⭕️", pX, pY);
+                    previewCtx.restore();
+                } else {
+                    if (gameStarted && !gameOver) {
+                        statusDiv.innerText = "☝️ Point your index finger up to drive!";
+                        statusDiv.style.display = "block";
+                    }
+                }
+            } else {
+                if (gameStarted && !gameOver) {
+                    statusDiv.innerText = "⚠️ Bring hand into camera frame!";
+                    statusDiv.style.display = "block";
+                }
+            }
+        }
+
+        // --- CORE GRAPHICS AND COMPUTATION RUNTIME ---
+        function gameLoop() {
+            if (!gameStarted) return;
+            if (gameOver) {
+                stopMusic();
+                drawGameOver();
+                return;
+            }
+
+            // Move lines downward loop structure
+            roadLines.forEach(line => {
+                line.y += roadSpeed;
+                if (line.y > canvas.height) line.y = -lineHeight;
+            });
+
+            // Obstacle timing pipeline updates
+            spawnTimer++;
+            let adjustedSpawnRate = Math.max(30, 70 - (roadSpeed * 3));
+            if (spawnTimer >= adjustedSpawnRate) {
+                let randomX = Math.floor(Math.random() * (canvas.width - enemyWidth));
+                enemies.push({ x: randomX, y: -enemyHeight, width: enemyWidth, height: enemyHeight });
+                spawnTimer = 0;
+            }
+
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                enemies[i].y += enemySpeed;
+
+                if (checkCollision(player, enemies[i])) {
+                    gameOver = true;
+                    if (score > highScore) {
+                        highScore = score;
+                        localStorage.setItem("carHighScore", highScore);
+                    }
+                }
+
+                if (enemies[i].y > canvas.height) {
+                    enemies.splice(i, 1);
+                    score++;
+                    
+                    // Progressive difficulty scaling curve
+                    if (score % 3 === 0) {
+                        enemySpeed += 0.8;
+                        roadSpeed += 0.8;
+                        // Speed up track tempo alongside vehicle acceleration updates
+                        startMusicSequencer();
+                    }
+                }
+            }
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Paint road lines
+            ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
+            roadLines.forEach(line => ctx.fillRect(line.x, line.y, lineWidth, lineHeight));
+
+            // Render cars
+            drawPlayerCar(player.x, player.y);
+            enemies.forEach(enemy => drawEnemyCar(enemy.x, enemy.y));
+
+            // Render HUD Interface Layer
+            ctx.fillStyle = "#FFFFFF";
+            ctx.font = "bold 22px Arial";
+            ctx.fillText("Score: " + score, 25, 45);
+            
+            ctx.fillStyle = "#ffcc00";
+            ctx.font = "bold 22px Arial";
+            ctx.fillText("🏆 High Score: " + highScore, 25, 80);
+
+            // Speedometer HUD indicator
+            ctx.fillStyle = "#ff6600";
+            ctx.font = "bold 18px Arial";
+            ctx.fillText("☝️ Velocity: " + Math.round(roadSpeed * 22) + " km/h", 25, 115);
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        function drawGameOver() {
+            ctx.fillStyle = "rgba(0, 0, 0, 0.85)";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.fillStyle = "#ff3333";
+            ctx.font = "bold 50px Arial";
+            ctx.textAlign = "center";
+            ctx.fillText("GAME OVER", canvas.width / 2, canvas.height / 2 - 40);
+            
+            ctx.fillStyle = "#FFFFFF";
+            ctx.font = "24px Arial";
+            ctx.fillText("Final Score: " + score, canvas.width / 2, canvas.height / 2 + 15);
+            ctx.fillText("Press 'R' on Keyboard to Restart", canvas.width / 2, canvas.height / 2 + 65);
+            ctx.textAlign = "start";
+            statusDiv.style.display = "none";
+        }
+
+        // --- PIPELINE INVOCATIONS ---
+        const handsInstance = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+        handsInstance.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.6,
+            minTrackingConfidence: 0.6
+        });
+        handsInstance.onResults(onResults);
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await handsInstance.send({ image: videoElement });
+            },
+            width: 640,
+            height: 480
+        });
+
+        camera.start().then(() => {
+            statusDiv.innerText = "👍 System Ready! Click Engine Start Button.";
+        });
+    </script>
+</body>
+</html>
